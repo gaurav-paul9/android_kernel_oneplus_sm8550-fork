@@ -29,3 +29,25 @@ obj-y				+= ti/
 obj-$(CONFIG_ARCH_U8500)	+= ux500/
 obj-$(CONFIG_PLAT_VERSATILE)	+= versatile/
 obj-y				+= xilinx/
+
+#ifdef OPLUS_FEATURE_TP_BASIC
+obj-$(CONFIG_OPLUS_DEVICE_IFNO)  +=  oplus/device_info/
+#endif /* OPLUS_FEATURE_TP_BASIC */
+
+obj-y                           += oplus/sensor/
+
+#ifdef CONFIG_OPLUS_SENSOR_CONSUMER_IR
+obj-$(CONFIG_OPLUS_SENSOR_CONSUMER_IR_CORE) += oplus/oplus_consumer_ir/
+#endif /* CONFIG_OPLUS_SENSOR_CONSUMER_IR */
+
+#ifdef OPLUS_FEATURE_DFT
+obj-y += oplus/dft/
+#endif /* ifdef OPLUS_FEATURE_DFT */
+
+#ifdef OPLUS_FEATURE_BOOT
+obj-y += oplus/boot/
+#endif /* OPLUS_FEATURE_BOOT */
+
+#ifdef OPLUS_FEATURE_DFR
+obj-y += oplus/dfr/
+#endif /* OPLUS_FEATURE_DFR */
