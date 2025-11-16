@@ -17,9 +17,6 @@ jobs:
       with:
         fetch-depth: 0
 
-    # -----------------------------------------------------------
-    # Install dependencies
-    # -----------------------------------------------------------
     - name: Install required packages
       run: |
         sudo apt update
@@ -29,94 +26,49 @@ jobs:
           device-tree-compiler wget zip unzip xz-utils \
           gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
 
-    # -----------------------------------------------------------
-    # Clone sm8550-modules at repo root
-    # -----------------------------------------------------------
     - name: Clone sm8550-modules
       run: |
         rm -rf sm8550-modules
         git clone https://github.com/LineageOS/android_kernel_oneplus_sm8550-modules.git \
           -b lineage-23.0 sm8550-modules --depth=1
 
-    # -----------------------------------------------------------
-    # DEBUG & AUTO-FIX OPLUS SYMLINKS
-    # -----------------------------------------------------------
     - name: DEBUG & FIX: ensure sm8550-modules symlinks resolve
       run: |
         set -euxo pipefail
 
-        echo "PWD: $(pwd)"
-        echo "---- kernel/oplus_cpu path ----"
-        ls -la kernel || true
-        ls -la kernel/oplus_cpu || true
-
-        echo "---- CURRENT symlink for thermal ----"
-        if [ -L kernel/oplus_cpu/thermal ]; then
-          echo "raw symlink: $(readlink kernel/oplus_cpu/thermal)"
-        else
-          echo "kernel/oplus_cpu/thermal is not a symlink"
-        fi
-
-        # Check if Kconfig exists where symlink is pointing
+        echo "Checking symlink for thermal..."
         if [ ! -f kernel/oplus_cpu/thermal/Kconfig ]; then
-          echo "❌ Kconfig missing — fixing symlink now"
-
-          # remove old broken symlink/directory
-          rm -rf kernel/oplus_cpu/thermal || true
-
-          # preferred correct relative target (2 dirs up)
+          echo "Fixing symlink..."
+          rm -rf kernel/oplus_cpu/thermal
           TARGET="../../sm8550-modules/oplus/kernel/cpu/thermal"
-
           if [ -d "$TARGET" ]; then
-            echo "✔ Using relative target: $TARGET"
             ln -s "$TARGET" kernel/oplus_cpu/thermal
           else
-            echo "⚠ Relative target not found — auto-detecting inside sm8550-modules"
-            REAL=$(find sm8550-modules -type d -path "*/oplus/kernel/cpu/thermal" -print -quit || true)
-
-            if [ -n "$REAL" ]; then
-              ABS="$(readlink -f "$REAL")"
-              echo "✔ Found thermal folder: $ABS"
-              ln -s "$ABS" kernel/oplus_cpu/thermal
-            else
-              echo "❌ Could NOT find thermal folder inside sm8550-modules"
-              echo "Listing sm8550-modules:"
-              find sm8550-modules -maxdepth 5 -type d
-              exit 1
-            fi
+            REAL=$(find sm8550-modules -type d -path "*/oplus/kernel/cpu/thermal" -print -quit)
+            ABS=$(readlink -f "$REAL")
+            ln -s "$ABS" kernel/oplus_cpu/thermal
           fi
-        else
-          echo "✔ kernel/oplus_cpu/thermal/Kconfig exists — no fix needed"
         fi
 
-        echo "---- FINAL symlink state ----"
+        echo "Final symlink ->" || true
         readlink kernel/oplus_cpu/thermal || true
         readlink -f kernel/oplus_cpu/thermal || true
-        ls -la kernel/oplus_cpu/thermal || true
 
-    # -----------------------------------------------------------
-    # Download toolchains
-    # -----------------------------------------------------------
-    - name: Download toolchains (clang-r450784e + GNU 14.2)
+    - name: Download toolchains
       run: |
         mkdir -p toolchains
         cd toolchains
 
-        wget -q https://github.com/ravindu644/Android-Kernel-Tutorials/releases/download/toolchains/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz \
-          -O arm-gnu.tar.xz
+        wget -q https://github.com/ravindu644/Android-Kernel-Tutorials/releases/download/toolchains/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz -O arm-gnu.tar.xz
         tar -xf arm-gnu.tar.xz
         rm arm-gnu.tar.xz
 
-        wget -q https://github.com/ravindu644/Android-Kernel-Tutorials/releases/download/toolchains/clang-r450784e.tar.gz \
-          -O clang.tar.gz
+        wget -q https://github.com/ravindu644/Android-Kernel-Tutorials/releases/download/toolchains/clang-r450784e.tar.gz -O clang.tar.gz
         tar -xf clang.tar.gz
         rm clang.tar.gz
 
         cd ..
 
-    # -----------------------------------------------------------
-    # Generate defconfig (GKI + vendor + debugfs)
-    # -----------------------------------------------------------
     - name: Generate defconfig
       run: |
         export ARCH=arm64
@@ -134,9 +86,6 @@ jobs:
 
         make O=$O ARCH=arm64 olddefconfig
 
-    # -----------------------------------------------------------
-    # Build kernel
-    # -----------------------------------------------------------
     - name: Compile kernel
       run: |
         export ARCH=arm64
@@ -149,7 +98,7 @@ jobs:
 
         export CLANG_PATH=$PWD/toolchains/clang-r450784e/bin
         export ARM_GNU=$(find $PWD/toolchains -maxdepth 1 -type d -name "arm-gnu-toolchain-*")
-        export PATH=$CLANG_PATH:$ARM_GNU/bin:/usr/bin:/usr/local/bin:$PATH
+        export PATH=$CLANG_PATH:$ARM_GNU/bin:$PATH
 
         export CC=clang
         export LD=ld.lld
@@ -158,33 +107,22 @@ jobs:
         export OBJCOPY=llvm-objcopy
         export OBJDUMP=llvm-objdump
         export STRIP=llvm-strip
-
         export CROSS_COMPILE=aarch64-none-linux-gnu-
         export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
 
         make -j$(nproc) O=$O ARCH=arm64 LLVM=1
 
-    # -----------------------------------------------------------
-    # Build DTBs
-    # -----------------------------------------------------------
     - name: Build DTBs
       run: |
         make -j$(nproc) O=out ARCH=arm64 dtbs
 
-    # -----------------------------------------------------------
-    # Combine kernel image + dtb
-    # -----------------------------------------------------------
     - name: Create Image.gz-dtb
       run: |
         BOOT=out/arch/arm64/boot
-        [ -f "$BOOT/Image.gz" ] || gzip -c "$BOOT/Image" > "$BOOT/Image.gz"
-
+        gzip -c "$BOOT/Image" > "$BOOT/Image.gz"
         DTB=$(find out/arch/arm64/boot/dts -name "*kalama*.dtb" | head -n1)
         cat "$BOOT/Image.gz" "$DTB" > "$BOOT/Image.gz-dtb"
 
-    # -----------------------------------------------------------
-    # Package ZIP via AnyKernel3
-    # -----------------------------------------------------------
     - name: Package kernel ZIP
       run: |
         git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
@@ -192,9 +130,6 @@ jobs:
         cd AnyKernel3
         zip -r9 ../OnePlus12R-Kernel.zip ./*
 
-    # -----------------------------------------------------------
-    # Upload GitHub release
-    # -----------------------------------------------------------
     - name: Upload Release
       uses: softprops/action-gh-release@v1
       with:
