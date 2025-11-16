@@ -17,10 +17,10 @@ jobs:
       with:
         fetch-depth: 0
 
-    # --------------------------
-    # Install dependencies
-    # --------------------------
-    - name: Install required packages (Ubuntu 24.04 fixed)
+    # -----------------------------------------------------------
+    # Install all dependencies (Ubuntu 24.04 safe versions)
+    # -----------------------------------------------------------
+    - name: Install dependencies
       run: |
         sudo apt update
         sudo apt install -y --no-install-recommends \
@@ -30,52 +30,61 @@ jobs:
           gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
         ccache -M 20G
 
-    # --------------------------
-    # Clone sm8550-modules repo
-    # (required for Oplus Kconfig symlinks)
-    # --------------------------
-    - name: Clone OnePlus sm8550 kernel modules
+    # -----------------------------------------------------------
+    # Clone sm8550-modules (REQUIRED for Oplus vendor Kconfig)
+    # MUST be cloned at: ./sm8550-modules
+    # -----------------------------------------------------------
+    - name: Clone OnePlus sm8550 kernel modules (correct path)
       run: |
-        mkdir -p kernel/oneplus
         git clone https://github.com/LineageOS/android_kernel_oneplus_sm8550-modules.git \
-            -b lineage-23.0 kernel/oneplus/sm8550-modules --depth=1
+          -b lineage-23.0 sm8550-modules --depth=1
 
-    # --------------------------
+    # -----------------------------------------------------------
+    # Debug symlink paths (optional, remove if not needed)
+    # -----------------------------------------------------------
+    - name: Debug symlinks
+      run: |
+        echo "Checking kernel/oplus_cpu/thermal:"
+        ls -al kernel/oplus_cpu || true
+        ls -al kernel/oplus_cpu/thermal || true
+        echo "Symlink target:"
+        readlink -f kernel/oplus_cpu/thermal/Kconfig || true
+
+        echo "Listing sm8550-modules vendor Kconfigs:"
+        find sm8550-modules -name "Kconfig" | grep oplus || true
+
+    # -----------------------------------------------------------
     # Download toolchains
-    # --------------------------
-    - name: Download ARM-GNU + clang-r450784e toolchains
+    # -----------------------------------------------------------
+    - name: Download ARM-GNU 14.2 + clang-r450784e
       run: |
         mkdir -p toolchains
         cd toolchains
 
-        echo "Downloading ARM GNU Toolchain..."
         wget -q https://github.com/ravindu644/Android-Kernel-Tutorials/releases/download/toolchains/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz \
-            -O arm-gnu.tar.xz
+          -O arm-gnu.tar.xz
         tar -xf arm-gnu.tar.xz
         rm arm-gnu.tar.xz
 
-        echo "Downloading clang-r450784e..."
         wget -q https://github.com/ravindu644/Android-Kernel-Tutorials/releases/download/toolchains/clang-r450784e.tar.gz \
-            -O clang.tar.gz
+          -O clang.tar.gz
         tar -xf clang.tar.gz
         rm clang.tar.gz
 
         cd ..
 
-    # --------------------------
-    # Generate kernel configuration
-    # --------------------------
-    - name: Apply GKI + vendor defconfigs
+    # -----------------------------------------------------------
+    # Merge GKI + vendor defconfigs (exact like ROM)
+    # -----------------------------------------------------------
+    - name: Generate kernel config
       run: |
         export ARCH=arm64
         export SUBARCH=arm64
         export O=out
         mkdir -p out
 
-        # Base GKI config
         make O=$O ARCH=arm64 gki_defconfig
 
-        # Merge 12R vendor configs (exactly like ROM)
         bash scripts/kconfig/merge_config.sh -m \
           out/.config \
           arch/arm64/configs/vendor/kalama_GKI.config \
@@ -84,9 +93,9 @@ jobs:
 
         make O=$O ARCH=arm64 olddefconfig
 
-    # --------------------------
-    # Build kernel
-    # --------------------------
+    # -----------------------------------------------------------
+    # Build kernel image
+    # -----------------------------------------------------------
     - name: Compile kernel with clang-r450784e
       run: |
         set -e
@@ -95,7 +104,6 @@ jobs:
         export SUBARCH=arm64
         export O=out
 
-        # Use system host gcc to avoid relr.dyn errors
         export HOSTCC=/usr/bin/gcc
         export HOSTCXX=/usr/bin/g++
         export HOSTLD=/usr/bin/ld
@@ -122,39 +130,39 @@ jobs:
           HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" HOSTLD="$HOSTLD" \
           CROSS_COMPILE="$CROSS_COMPILE"
 
-    # --------------------------
+    # -----------------------------------------------------------
     # Build DTBs
-    # --------------------------
+    # -----------------------------------------------------------
     - name: Build DTBs
       run: |
         make -j$(nproc) O=out ARCH=arm64 dtbs
 
-    # --------------------------
-    # Create Image.gz-dtb
-    # --------------------------
+    # -----------------------------------------------------------
+    # Build Image.gz-dtb
+    # -----------------------------------------------------------
     - name: Create Image.gz-dtb
       run: |
         BOOT=out/arch/arm64/boot
-        if [ ! -f "$BOOT/Image.gz" ]; then
-          gzip -c "$BOOT/Image" > "$BOOT/Image.gz"
-        fi
+
+        [ -f "$BOOT/Image.gz" ] || gzip -c "$BOOT/Image" > "$BOOT/Image.gz"
+
         DTB=$(find out/arch/arm64/boot/dts -name "*kalama*.dtb" | head -n1)
         cat "$BOOT/Image.gz" "$DTB" > "$BOOT/Image.gz-dtb"
 
-    # --------------------------
-    # AnyKernel3 packaging
-    # --------------------------
-    - name: Package kernel into AnyKernel3 ZIP
+    # -----------------------------------------------------------
+    # AnyKernel3 Packaging
+    # -----------------------------------------------------------
+    - name: Package kernel ZIP
       run: |
         git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
         cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
         cd AnyKernel3
         zip -r9 ../OnePlus12R-Kernel.zip ./*
 
-    # --------------------------
+    # -----------------------------------------------------------
     # GitHub Release
-    # --------------------------
-    - name: Upload Release
+    # -----------------------------------------------------------
+    - name: Upload release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: "build-${{ github.run_id }}"
