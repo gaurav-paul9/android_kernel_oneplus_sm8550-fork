@@ -1,4 +1,4 @@
-name: Build OnePlus 12R Kernel (ASTON) — clang-r450784e + ARM-GNU 14.2
+name: Build OnePlus 12R (ASTON) Kernel — clang-r450784e + ARM-GNU 14.2
 
 on:
   workflow_dispatch:
@@ -17,54 +17,52 @@ jobs:
       with:
         fetch-depth: 0
 
-    - name: Install deps & ccache
+    - name: Install dependencies (Ubuntu 24.04 fixed)
       run: |
         sudo apt update
         sudo apt install -y --no-install-recommends \
-          build-essential bc bison flex libncurses-dev libssl-dev ccache \
-          curl wget git python3 python3-distutils device-tree-compiler \
-          gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi zip unzip xz-utils
+          build-essential bc bison flex libncurses-dev libssl-dev \
+          ccache curl wget git python3 python3-setuptools \
+          device-tree-compiler zip unzip xz-utils \
+          gcc-aarch64-linux-gnu gcc-arm-linux-gnueabi
         ccache -M 20G
 
-    # -------------------------
-    #  Download your toolchains
-    # -------------------------
-    - name: Download custom toolchains (ARM GNU + clang-r450784e)
+    # ---------------------------------------
+    # Download toolchains
+    # ---------------------------------------
+    - name: Download ARM-GNU & Clang-r450784e
       run: |
         mkdir -p toolchains
         cd toolchains
 
-        echo "Downloading ARM GNU Toolchain 14.2 ..."
+        echo "Downloading ARM GNU Toolchain 14.2..."
         wget -q https://github.com/ravindu644/Android-Kernel-Tutorials/releases/download/toolchains/arm-gnu-toolchain-14.2.rel1-x86_64-aarch64-none-linux-gnu.tar.xz \
               -O arm-gnu.tar.xz
         tar -xf arm-gnu.tar.xz
         rm arm-gnu.tar.xz
 
-        echo "Downloading clang-r450784e ..."
+        echo "Downloading clang-r450784e..."
         wget -q https://github.com/ravindu644/Android-Kernel-Tutorials/releases/download/toolchains/clang-r450784e.tar.gz \
-              -O clang-r450784e.tar.gz
-        tar -xf clang-r450784e.tar.gz
-        rm clang-r450784e.tar.gz
+              -O clang.tar.gz
+        tar -xf clang.tar.gz
+        rm clang.tar.gz
 
         cd ..
-
-        echo "Toolchains downloaded:"
+        echo "Downloaded toolchains:"
         ls -la toolchains
 
-    # -------------------------
-    #   Prepare defconfig
-    # -------------------------
-    - name: Generate final .config (GKI + vendor fragments)
+    # ---------------------------------------
+    # Generate final kernel config
+    # ---------------------------------------
+    - name: Merge GKI + vendor defconfigs
       run: |
         export ARCH=arm64
         export SUBARCH=arm64
         export O=out
         mkdir -p out
 
-        # Base GKI defconfig
         make O=$O ARCH=arm64 gki_defconfig
 
-        # Merge vendor configs (OnePlus 12R / kalama)
         bash scripts/kconfig/merge_config.sh -m \
           out/.config \
           arch/arm64/configs/vendor/kalama_GKI.config \
@@ -73,10 +71,10 @@ jobs:
 
         make O=$O ARCH=arm64 olddefconfig
 
-    # -------------------------
-    #   Build with your clang
-    # -------------------------
-    - name: Build kernel
+    # ---------------------------------------
+    # Build kernel
+    # ---------------------------------------
+    - name: Compile kernel with clang-r450784e
       run: |
         set -e
 
@@ -84,77 +82,75 @@ jobs:
         export SUBARCH=arm64
         export O=out
 
-        # ---- FIX RELR ERRORS: use system GCC for host tools ----
+        # Prevent relr.dyn errors
         export HOSTCC=/usr/bin/gcc
         export HOSTCXX=/usr/bin/g++
         export HOSTLD=/usr/bin/ld
 
-        # ---- Toolchain paths ----
+        # Paths
         export CLANG_PATH=$PWD/toolchains/clang-r450784e/bin
-        export ARM_GNU_PATH=$(find $PWD/toolchains -maxdepth 1 -type d -name "arm-gnu-toolchain-*")/bin
+        export ARMGNU_PATH=$(find $PWD/toolchains -maxdepth 1 -type d -name "arm-gnu-toolchain-*")/bin
 
-        # System paths first, then clang
-        export PATH=/usr/bin:/usr/local/bin:$ARM_GNU_PATH:$CLANG_PATH:$PATH
+        export PATH=/usr/bin:/usr/local/bin:$ARMGNU_PATH:$CLANG_PATH:$PATH
 
-        # ---- Clang target binaries ----
+        # Clang binaries
         export CC=$CLANG_PATH/clang
         export LD=$CLANG_PATH/ld.lld
         export AR=$CLANG_PATH/llvm-ar
         export NM=$CLANG_PATH/llvm-nm
-        export OBJCOPY=$CLANG_PATH/llvm-objcopy
         export OBJDUMP=$CLANG_PATH/llvm-objdump
+        export OBJCOPY=$CLANG_PATH/llvm-objcopy
         export STRIP=$CLANG_PATH/llvm-strip
 
-        # ---- ARM GNU CROSS_COMPILER ----
+        # Cross-compiler from ARM GNU toolchain
         export CROSS_COMPILE=aarch64-none-linux-gnu-
         export CROSS_COMPILE_ARM32=arm-linux-gnueabi-
 
-        # ---- Build ----
+        # Build kernel
         make -j$(nproc) O=$O ARCH=arm64 LLVM=1 \
           CC="$CC" LD="$LD" AR="$AR" NM="$NM" \
           OBJCOPY="$OBJCOPY" OBJDUMP="$OBJDUMP" STRIP="$STRIP" \
           HOSTCC="$HOSTCC" HOSTCXX="$HOSTCXX" HOSTLD="$HOSTLD" \
           CROSS_COMPILE="$CROSS_COMPILE"
 
-    # -------------------------
-    #   Build dtbs
-    # -------------------------
+    # ---------------------------------------
+    # Build DTBs
+    # ---------------------------------------
     - name: Build DTBs
       run: |
         make -j$(nproc) O=out ARCH=arm64 dtbs || true
 
-    # -------------------------
-    # Build Image.gz-dtb
-    # -------------------------
+    # ---------------------------------------
+    # Create Image.gz-dtb
+    # ---------------------------------------
     - name: Create Image.gz-dtb
       run: |
         BOOT=out/arch/arm64/boot
 
-        if [ ! -f $BOOT/Image.gz ]; then
-          gzip -c $BOOT/Image > $BOOT/Image.gz
+        if [ ! -f "$BOOT/Image.gz" ]; then
+          gzip -c "$BOOT/Image" > "$BOOT/Image.gz"
         fi
 
         DTB=$(find out/arch/arm64/boot/dts -name "*kalama*.dtb" | head -n1)
+
         echo "Using DTB: $DTB"
+        cat "$BOOT/Image.gz" "$DTB" > "$BOOT/Image.gz-dtb"
 
-        cat $BOOT/Image.gz $DTB > $BOOT/Image.gz-dtb
-
-    # -------------------------
-    #   AnyKernel3 Packaging
-    # -------------------------
-    - name: Package flashable ZIP
+    # ---------------------------------------
+    # Package AnyKernel zip
+    # ---------------------------------------
+    - name: Create AnyKernel3 flashable ZIP
       run: |
         git clone --depth=1 https://github.com/osm0sis/AnyKernel3 AnyKernel3
-
         cp out/arch/arm64/boot/Image.gz-dtb AnyKernel3/
 
         cd AnyKernel3
         zip -r9 ../OnePlus12R-Kernel.zip ./*
 
-    # -------------------------
-    # Github Release
-    # -------------------------
-    - name: Create Release
+    # ---------------------------------------
+    # Release
+    # ---------------------------------------
+    - name: Upload Release
       uses: softprops/action-gh-release@v1
       with:
         tag_name: "build-${{ github.run_id }}"
